@@ -20,12 +20,13 @@ require 'rails_helper'
 
 RSpec.describe AccountsController, :type => :controller do
 
-  # This should return the minimal set of attributes required to create a valid
-  # Account. As you add validations to Account, be sure to
-  # adjust the attributes here as well.
-  let(:valid_attributes) {
-    skip("Add a hash of attributes valid for your model")
-  }
+ # This should return the minimal set of attributes required
+   # to create a valid Account. As you add validations to
+   # Account, be sure to adjust the attributes here as well.
+   let(:valid_attributes) { { "shopify_account_url" =>
+   "MyString", "shopify_password" => "MyString",
+   "shopify_api_key" => "MyString", "shopify_shared_secret" =>
+   "MyString" } }
 
   let(:invalid_attributes) {
     skip("Add a hash of attributes invalid for your model")
@@ -89,12 +90,14 @@ RSpec.describe AccountsController, :type => :controller do
 
     describe "with invalid params" do
       it "assigns a newly created but unsaved account as @account" do
+        Account.any_instance.stub(:save).and_return(false)
         post :create, {:account => invalid_attributes}, valid_session
         expect(assigns(:account)).to be_a_new(Account)
       end
 
       it "re-renders the 'new' template" do
-        post :create, {:account => invalid_attributes}, valid_session
+        Account.any_instance.stub(:save).and_return(false)
+        post :create, {:account => { "shopify_account_url" => "invalid value" }}, valid_session
         expect(response).to render_template("new")
       end
     end
