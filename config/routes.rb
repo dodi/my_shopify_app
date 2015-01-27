@@ -1,4 +1,10 @@
 Rails.application.routes.draw do
+  
+
+  resources :products do 
+    resources :variants
+  end
+
   resources :accounts do 
     member do 
       get 'test_connection'
