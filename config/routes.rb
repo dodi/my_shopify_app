@@ -1,14 +1,13 @@
 Rails.application.routes.draw do
   resources :accounts do 
+    member do 
+      get 'test_connection'
+    end
+ end
 
-  get 'dashboard/index'
-  root 'accounts#index'
+ get "dashboard/index"
 
-  member do 
-    get 'test_connection'
-  end
-    
-  end
+ root 'dashboard#index'
 
   # The priority is based upon order of creation: first created -> highest priority.
   # See how all your routes lay out with "rake routes".
