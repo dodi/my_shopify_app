@@ -1,343 +1,161 @@
-require 'spec_helper'
+class ShopifyIntegration
 
-describe ShopifyIntegration do
+  attr_accessor :api_key, :shared_secret, :url, :password
 
-  context "initialize" do
-    it "should raise exception if required parameters are not supplied" do
-      expect {ShopifyIntegration.new(
-                :api_key => "123abc",
-                :shared_secret => "sharedsecret",
-                :url => "http://url.to.store",
-                :password => "secretsecret"
-      )}.to_not raise_error
+  def initialize(params)
+    # Ensure that all the parameters are passed in
+    %w{api_key shared_secret url password}.each do |field|
+      raise ArgumentError.new("params[:#{field}] is required") if params[field.to_sym].blank?
 
-      expect {ShopifyIntegration.new(
-                :shared_secret => "sharedsecret",
-                :url => "http://url.to.store",
-                :password => "secretsecret"
-      )}.to raise_error
-
-      expect {ShopifyIntegration.new(
-                :api_key => "123abc",
-                :url => "http://url.to.store",
-                :password => "secretsecret"
-      )}.to raise_error
-
-      expect {ShopifyIntegration.new(
-                :api_key => "123abc",
-                :shared_secret => "sharedsecret",
-                :password => "secretsecret"
-      )}.to raise_error
-
-      expect {ShopifyIntegration.new(
-                :api_key => "123abc",
-                :shared_secret => "sharedsecret",
-                :url => "http://url.to.store"
-      )}.to raise_error
-
-
-      expect {ShopifyIntegration.new(
-                :api_key => "",
-                :shared_secret => "sharedsecret",
-                :url => "http://url.to.store",
-                :password => "secretsecret"
-      )}.to raise_error
-
-      expect {ShopifyIntegration.new(
-                :api_key => nil,
-                :shared_secret => "sharedsecret",
-                :url => "http://url.to.store",
-                :password => "secretsecret"
-      )}.to raise_error
-
-      expect {ShopifyIntegration.new()}.to raise_error
-
+      # If present, then set as an instance variable
+      instance_variable_set("@#{field}", params[field.to_sym])
     end
+  end
 
-    it "should set instance_variables" do
-      shopify_integration = ShopifyIntegration.new(
-        :api_key => "123abc",
-        :shared_secret => "sharedsecret",
-        :url => "http://url.to.store",
-        :password => "secretsecret"
-      )
+  # Uses the provided credentials to create an active Shopify session
+  def connect
 
-      shopify_integration.api_key.should == "123abc"
-      shopify_integration.shared_secret.should == "sharedsecret"
-      shopify_integration.url.should == "http://url.to.store"
-      shopify_integration.password.should == "secretsecret"
+    # Initialize the gem
+    ShopifyAPI::Session.setup({api_key: @api_key, secret: @shared_secret})
 
-    end
+    # Instantiate the session
+    session = ShopifyAPI::Session.new(@url, @password)
+
+    # Activate the Session so that requests can be made
+    return ShopifyAPI::Base.activate_session(session)
 
   end
 
-  context "connect" do
+  def import_orders
 
-    before do
-      @shopify_integration = ShopifyIntegration.new(
-        :api_key => "123abc",
-        :shared_secret => "sharedsecret",
-        :url => "http://url.to.store",
-        :password => "secretsecret"
-      )
+    # Local variables
+    created = failed = 0
+    page = 1
 
-      @session = OpenStruct.new()
+
+    # Get the first page of orders
+    shopify_orders = ShopifyAPI::Order.find(:all, params: {limit: 50, page: page})
+
+    # Keep going while we have more orders to process
+    while shopify_orders.size > 0
+
+      shopify_orders.each do |shopify_order|
+
+        # See if we've already imported the order
+        order = Order.find_by_shopify_order_id(shopify_order.id)
+
+        unless order.present?
+
+          # If not already imported, create a new order
+          order = Order.new(number: shopify_order.name,
+                            email: shopify_order.email,
+                            first_name: shopify_order.billing_address.first_name,
+                            last_name: shopify_order.billing_address.last_name,
+                            shopify_order_id: shopify_order.id,
+                            order_date: shopify_order.created_at,
+                            total: shopify_order.total_price,
+                            financial_status: shopify_order.financial_status
+                            )
+
+          # Iterate through the line_items
+          shopify_order.line_items.each do |line_item|
+            variant = Variant.find_by_shopify_variant_id(line_item.variant_id)
+            if variant.present?
+              order.order_items.build(variant_id: variant.id,
+                                      shopify_product_id: line_item.product_id,
+                                      shopify_variant_id: line_item.id,
+                                      quantity:  line_item.quantity,
+                                      unit_price: line_item.price)
+            end
+          end
+
+          if order.save
+            created += 1
+          else
+            failed += 1
+          end
+        end
+
+      end
+
+      # Grab the next page of products
+      page += 1
+      shopify_orders = ShopifyAPI::Order.find(:all, params: {limit: 50, page: page})
+
+
     end
 
-    it "should activate a session with Shopify" do
-
-      ShopifyAPI::Session.should_receive(:setup).with(:api_key => "123abc", :secret => "sharedsecret")
-      ShopifyAPI::Session.should_receive(:new).with("http://url.to.store", "secretsecret").and_return(@session)
-      ShopifyAPI::Base.should_receive(:activate_session).with(@session)
-      @shopify_integration.connect
-    end
-
+    # Once we are done, return the results
+    return {created: created,  failed: failed}
   end
 
-  context "self.import_products" do
-    before do
+  def import_products
 
-      @shopify_integration = ShopifyIntegration.new(
-        :api_key => "123abc",
-        :shared_secret => "sharedsecret",
-        :url => "http://url.to.store",
-        :password => "secretsecret"
-      )
+    # Local variables
+    created = failed = updated = 0
+    page = 1
 
-      @product1 = OpenStruct.new(:id => 1234, :name => "Another Product", :variants => [OpenStruct.new(:id => 1, :sku => "11111", :title => "VT", barcode: "1231231", price: 10.3)])
-      @product2 = OpenStruct.new(:id => 4444, :name => "Sample Product", :variants => [OpenStruct.new(:id => 2, :sku => "343434", :title => nil, barcode: "123412345", price: 10.3)])
-      @product3 = OpenStruct.new(:id => 5555, :name => "Demo Product", :variants => [OpenStruct.new(:id => 3, :sku => "abc123", :title => "", barcode: "3453245345", price: 10.3)])
+    # Grab the first page of products
+    shopify_products = ShopifyAPI::Product.find(:all, params: {limit: 100, page: page})
 
-    end
+    # Keep looping until no more products are returned
+    while shopify_products.size > 0
 
-    it "should create a new product if it doesn't exist" do
-      product = FactoryGirl.create(:product, :shopify_product_id => 99999)
-      variant = FactoryGirl.create(:variant, :product_id => product.id, :sku => "1234", :shopify_variant_id => 8888)
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 1}).and_return(
-        [@product1, @product2]
-      )
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 2}).and_return(
-        []
-      )
+      shopify_products.each do |shopify_product|
 
-      result = @shopify_integration.import_products
-      result[:created].should == 2
-      result[:updated].should == 0
-      result[:failed].should == 0
+        # See if the product exists
+        product = Product.find_by_shopify_product_id(shopify_product.id)
 
+        # If so, attempt to update it
+        if product.present?
+          unless product.update_attributes(last_shopify_sync: DateTime.now, name: shopify_product.title)
+            failed += 1
+            next
+          end
+        else
 
-    end
+          # Otherwise, create it
+          product = Product.new(last_shopify_sync: DateTime.now, name: shopify_product.title, shopify_product_id: shopify_product.id)
+          unless product.save
+            failed += 1
+            next
+          end
+        end
 
-    it "should update an existing product if it already exists" do
-      product = FactoryGirl.create(:product, :name => "Old Name", :shopify_product_id => 99999)
-      variant = FactoryGirl.create(:variant, :product_id => product.id, :sku => "abc123", :shopify_variant_id => 3)
+        # Iterate through the variants
+        shopify_product.variants.each do |shopify_variant|
 
+          # See if the variant exists
+          variant = Variant.find_by_shopify_variant_id(shopify_variant.id)
+          if variant.present?
+            # If so, update it
+            if variant.update_attributes(sku: shopify_variant.sku, barcode: shopify_variant.barcode, option1: shopify_variant.option1, option2: shopify_variant.option2, option3: shopify_variant.option3, product_id: product.id, shopify_variant_id: shopify_variant.id, price: shopify_variant.price, last_shopify_sync: DateTime.now)
+              updated += 1
+            else
+              failed += 1
+            end
+          else
+            # Otherwise create it
+            if Variant.create(sku: shopify_variant.sku, barcode: shopify_variant.barcode, option1: shopify_variant.option1, option2: shopify_variant.option2, option3: shopify_variant.option3, product_id: product.id, shopify_variant_id: shopify_variant.id, price: shopify_variant.price, last_shopify_sync: DateTime.now)
+              created += 1
+            else
+              failed += 1
+            end
+          end
+        end
 
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 1}).and_return(
-        [@product3]
-      )
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 2}).and_return(
-        []
-      )
+      end
 
-      result = @shopify_integration.import_products
-      result[:created].should == 0
-      result[:updated].should == 1
-      result[:failed].should == 0
-
-    end
-
-    it "should page through until there are no more products" do
-      product = FactoryGirl.create(:product, :name => "Old Name", :shopify_product_id => 99999)
-      variant = FactoryGirl.create(:variant, :product_id => product.id, :sku => "abc123", :shopify_variant_id => 3)
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 1}).and_return(
-        [@product1, @product3]
-      )
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 2}).and_return(
-        []
-      )
-
-      result = @shopify_integration.import_products
-      result[:created].should == 1
-      result[:updated].should == 1
-      result[:failed].should == 0
+      # Grab the next page of products
+      page += 1
+      shopify_products = ShopifyAPI::Product.find(:all, params: {limit: 100, page: page})
 
 
     end
 
-    it "should report failure to create product" do
-      product = Product.new(:name => "Old Name", :shopify_product_id => 99999 )
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 1}).and_return(
-        [@product1]
-      )
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 2}).and_return(
-        []
-      )
+    # Return the results once no more products are left
+    return {created: created, updated: updated, failed: failed}
 
-
-      Product.should_receive(:find_by_shopify_product_id).and_return(nil)
-
-      Product.should_receive(:new).and_return(product)
-      product.should_receive(:save).and_return(false)
-
-      result = @shopify_integration.import_products
-      result[:created].should == 0
-      result[:updated].should == 0
-      result[:failed].should == 1
-    end
-
-    it "should report failure to update product" do
-      product = FactoryGirl.create(:product, :name => "Old Name", :shopify_product_id => 99999)
-      variant = FactoryGirl.create(:variant, :product_id => product.id, :sku => "abc123", :shopify_variant_id => 3)
-
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 1}).and_return(
-        [@product3]
-      )
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 2}).and_return(
-        []
-      )
-
-      Product.should_receive(:find_by_shopify_product_id).and_return(product)
-      product.should_receive(:update_attributes).and_return(false)
-
-
-      result = @shopify_integration.import_products
-      result[:created].should == 0
-      result[:updated].should == 0
-      result[:failed].should == 1
-    end
-
-    it "should report failure to create variant" do
-      product = Product.new(:name => "Old Name", :shopify_product_id => 99999 )
-      variant = FactoryGirl.create(:variant, :product_id => product.id, :sku => "abc123", :shopify_variant_id => 3)
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 1}).and_return(
-        [@product1]
-      )
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 2}).and_return(
-        []
-      )
-
-
-      Variant.should_receive(:find_by_shopify_variant_id).and_return(nil)
-
-      Variant.should_receive(:create).and_return(false)
-
-      result = @shopify_integration.import_products
-      result[:created].should == 0
-      result[:updated].should == 0
-      result[:failed].should == 1
-    end
-
-    it "should report failure to update variant" do
-      product = FactoryGirl.create(:product, :name => "Old Name", :shopify_product_id => 99999)
-      variant = FactoryGirl.create(:variant, :product_id => product.id, :sku => "abc123", :shopify_variant_id => 3)
-
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 1}).and_return(
-        [@product3]
-      )
-      ShopifyAPI::Product.should_receive(:find).with(:all, :params => {:limit => 100, :page => 2}).and_return(
-        []
-      )
-
-      Variant.should_receive(:find_by_shopify_variant_id).and_return(variant)
-      variant.should_receive(:update_attributes).and_return(false)
-
-
-      result = @shopify_integration.import_products
-      result[:created].should == 0
-      result[:updated].should == 0
-      result[:failed].should == 1
-    end
-
-  end
-
-
-  context "import_orders" do
-
-    before do
-
-      @shopify_integration = ShopifyIntegration.new(
-        :api_key => "123abc",
-        :shared_secret => "sharedsecret",
-        :url => "http://url.to.store",
-        :password => "secretsecret"
-      )
-
-      @order1 = OpenStruct.new(:id => 1234,
-                               :name => "#1000",
-                               :email => "test@example.com",
-                               :created_at => DateTime.now,
-                               :total => 10.00,
-                               :financial_status => "paid",
-                               :billing_address => OpenStruct.new(:id => 1, :first_name => "Mickey", :last_name => "Mouse", :email => "mickey@mouse.com",
-                                                                   :address1 => "333 Main St", :address2 => "Apt 3", :city => "Townville", :provice_code => "AB",
-                                                                   :zip => "12345", :country_code => "US", :phone => "555-555-1234"),
-                               :line_items => [OpenStruct.new(:id => 1, :product_id => 1234, :sku => "11111", :quantity => 1, :price => 15.0)],
-                               )
-
-      @order2 = OpenStruct.new(:id => 4444,
-                               :name => "#1001",
-                               :email => "test@example.com",
-                               :created_at => DateTime.now,
-                               :total => 10.00,
-                               :financial_status => "paid",
-                               :billing_address => OpenStruct.new(:id => 1, :first_name => "Daffy", :last_name => "Duck", :email => "daffy@duck.com",
-                                                                   :address1 => "333 Main St", :city => "Townville", :provice_code => "AB",
-                                                                   :zip => "12345", :country_code => "US", :phone => "555-555-1234"),
-                               :line_items => [OpenStruct.new(:id => 1, :product_id => 1234, :sku => "11111", :quantity => 1, :price => 15.0)],
-                               )
-
-      @order3 = OpenStruct.new(:id => 5555,
-                               :name => "#1002",
-                               :email => "test@example.com",
-                               :created_at => DateTime.now,
-                               :total => 10.00,
-                               :financial_status => "paid",
-                               :billing_address => OpenStruct.new(:id => 1, :first_name => "Donald", :last_name => "Duck", :email => "donald@duck.com",:address1 => "333 Main St", :address2 => "Apt 3", :city => "Townville", :provice_code => "AB",
-                                                                   :zip => "12345", :country_code => "US", :phone => "555-555-1234"),
-                               :line_items => [OpenStruct.new(:id => 1, :product_id => 1234, :sku => "11111", :quantity => 1, :price => 15.0), OpenStruct.new(:id => 2, :product_id => 4567, :sku => "4444", :quantity => 2, :price => 15.0)],
-
-                               )
-
-    end
-
-    it "should create a new order if it doesn't exist" do
-      order = FactoryGirl.create(:order, :shopify_order_id => 99999)
-
-      ShopifyAPI::Order.should_receive(:find).with(:all, :params => {:limit => 50, :page => 1}).and_return(
-        [@order1, @order2]
-      )
-      ShopifyAPI::Order.should_receive(:find).with(:all, :params => {:limit => 50, :page => 2}).and_return(
-        []
-      )
-
-      result = result = @shopify_integration.import_orders
-      result[:created].should == 2
-      result[:failed].should == 0
-
-
-    end
-
-
-    it "should report failure to create order" do
-      order = Order.new(:number => "#1001", :shopify_order_id => 99999 )
-
-      ShopifyAPI::Order.should_receive(:find).with(:all, :params => {:limit => 50, :page => 1}).and_return(
-        [@order1]
-      )
-      ShopifyAPI::Order.should_receive(:find).with(:all, :params => {:limit => 50, :page => 2}).and_return(
-        []
-      )
-
-      Order.should_receive(:find_by_shopify_order_id).and_return(nil)
-
-      Order.should_receive(:new).and_return(order)
-      order.should_receive(:save).and_return(false)
-
-      result = @shopify_integration.import_orders
-      result[:created].should == 0
-      result[:failed].should == 1
-    end
   end
 
 end

@@ -28,10 +28,6 @@ RSpec.describe AccountsController, :type => :controller do
    "shopify_api_key" => "MyString", "shopify_shared_secret" =>
    "MyString" } }
 
-  let(:invalid_attributes) {
-    skip("Add a hash of attributes invalid for your model")
-  }
-
   # This should return the minimal set of values that should be in the session
   # in order to pass any filters (e.g. authentication) defined in
   # AccountsController. Be sure to keep this updated too.
@@ -91,11 +87,11 @@ RSpec.describe AccountsController, :type => :controller do
     describe "with invalid params" do
       it "assigns a newly created but unsaved account as @account" do
         Account.any_instance.stub(:save).and_return(false)
-        post :create, {:account => invalid_attributes}, valid_session
+        post :create, {:account => { "shopify_account_url" => "invalid value" }}, valid_session
         expect(assigns(:account)).to be_a_new(Account)
       end
 
-      it "re-renders the 'new' template" do
+      it "re-renders the 'new' template" do        
         Account.any_instance.stub(:save).and_return(false)
         post :create, {:account => { "shopify_account_url" => "invalid value" }}, valid_session
         expect(response).to render_template("new")
@@ -105,15 +101,14 @@ RSpec.describe AccountsController, :type => :controller do
 
   describe "PUT update" do
     describe "with valid params" do
-      let(:new_attributes) {
-        skip("Add a hash of attributes valid for your model")
-      }
-
       it "updates the requested account" do
         account = Account.create! valid_attributes
-        put :update, {:id => account.to_param, :account => new_attributes}, valid_session
-        account.reload
-        skip("Add assertions for updated state")
+        # Assuming there are no other accounts in the database, this
+        # specifies that the Account created on the previous line
+        # receives the :update_attributes message with whatever params are
+        # submitted in the request.
+        Account.any_instance.should_receive(:update).with({ "shopify_account_url" => "MyString" })
+        put :update, {:id => account.to_param, :account => { "shopify_account_url" => "MyString" }}, valid_session
       end
 
       it "assigns the requested account as @account" do
@@ -132,13 +127,17 @@ RSpec.describe AccountsController, :type => :controller do
     describe "with invalid params" do
       it "assigns the account as @account" do
         account = Account.create! valid_attributes
-        put :update, {:id => account.to_param, :account => invalid_attributes}, valid_session
+         # Trigger the behavior that occurs when invalid params are submitted
+        Account.any_instance.stub(:save).and_return(false)
+        put :update, {:id => account.to_param, :account => { "shopify_account_url" => "invalid value" }}, valid_session
         expect(assigns(:account)).to eq(account)
       end
 
       it "re-renders the 'edit' template" do
         account = Account.create! valid_attributes
-        put :update, {:id => account.to_param, :account => invalid_attributes}, valid_session
+        # Trigger the behavior that occurs when invalid params are submitted
+        Account.any_instance.stub(:save).and_return(false)
+        put :update, {:id => account.to_param, :account => { "shpoify_account_url" => "invalid value" }}, valid_session
         expect(response).to render_template("edit")
       end
     end
