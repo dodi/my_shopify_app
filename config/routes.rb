@@ -2,8 +2,11 @@ Rails.application.routes.draw do
   
 
   resources :products do 
-    resources :variants
+    collection do 
+      get 'import'
+    end
   end
+  resources :variants
 
   resources :accounts do 
     member do 
