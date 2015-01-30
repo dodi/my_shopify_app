@@ -1,5 +1,4 @@
 Rails.application.routes.draw do
-  
 
   resources :orders do 
     collection do 
@@ -11,8 +10,9 @@ Rails.application.routes.draw do
     collection do 
       get 'import'
     end
+    resources :variants
   end
-  resources :variants
+  
 
   resources :accounts do 
     member do 
